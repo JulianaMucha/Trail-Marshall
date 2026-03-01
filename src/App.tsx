@@ -4,8 +4,8 @@ import * as L from 'leaflet';
 import 'leaflet.heat';
 import React, { useEffect, useState, useCallback } from 'react';
 import { MapContainer, TileLayer, Polyline, CircleMarker, Popup, useMap } from 'react-leaflet';
-import { io, Socket } from 'socket.io-client';
-import { Activity, ShieldAlert, ShieldCheck, Navigation, Radio, Github } from 'lucide-react';
+import axios from 'axios';
+import { Activity, ShieldAlert, ShieldCheck, Navigation, Github } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 // --- Types ---
@@ -22,6 +22,14 @@ interface GitHubUser {
   username: string;
   avatar_url: string;
 }
+
+// --- Sample/mock telemetry data for testing ---
+const samplePoints: TelemetryPoint[] = [
+  { id: 1, latitude: 37.7749, longitude: -122.4194, vibration_variance: 0.1, status: 'Good', timestamp: new Date().toISOString() },
+  { id: 2, latitude: 37.7755, longitude: -122.4180, vibration_variance: 0.6, status: 'Bad', timestamp: new Date().toISOString() },
+  { id: 3, latitude: 37.7760, longitude: -122.4170, vibration_variance: 0.3, status: 'Good', timestamp: new Date().toISOString() },
+  { id: 4, latitude: 37.7765, longitude: -122.4160, vibration_variance: 0.9, status: 'Bad', timestamp: new Date().toISOString() },
+];
 
 // --- Components ---
 const StatusBadge = ({ status }: { status: 'Good' | 'Bad' }) => (
@@ -52,22 +60,37 @@ const HeatmapLayer = ({ points }: HeatmapLayerProps) => {
 
   useEffect(() => {
     if (points.length === 0) return;
-
     const heatPoints = points.map(p => [p.latitude, p.longitude, p.vibration_variance]);
     const heat = (L as any).heatLayer(heatPoints, {
       radius: 25,
       blur: 15,
       maxZoom: 17,
-      gradient: {
-        0.2: 'green',
-        0.5: 'yellow',
-        0.8: 'orange',
-        1.0: 'red'
-      }
+      gradient: { 0.2: 'green', 0.5: 'yellow', 0.8: 'orange', 1.0: 'red' }
     }).addTo(map);
-
     return () => heat.remove();
   }, [points, map]);
+
+  return null;
+};
+
+// Marker for selected row
+const SelectedPointMarker = ({ point }: { point: TelemetryPoint | null }) => {
+  const map = useMap();
+  useEffect(() => {
+    if (!point) return;
+    map.setView([point.latitude, point.longitude], 17);
+
+    const marker = L.circleMarker([point.latitude, point.longitude], {
+      radius: 10,
+      color: '#facc15',
+      fillColor: '#facc15',
+      fillOpacity: 0.8,
+    }).addTo(map);
+
+    marker.bindPopup(`<b>Status:</b> ${point.status}<br/><b>Variance:</b> ${point.vibration_variance.toFixed(4)}`).openPopup();
+
+    return () => map.removeLayer(marker);
+  }, [point, map]);
 
   return null;
 };
@@ -75,12 +98,12 @@ const HeatmapLayer = ({ points }: HeatmapLayerProps) => {
 // --- Main App ---
 export default function App() {
   const [points, setPoints] = useState<TelemetryPoint[]>([]);
-  const [socket, setSocket] = useState<Socket | null>(null);
-  const [isTracking, setIsTracking] = useState(false);
   const [latestGPS, setLatestGPS] = useState<[number, number]>([0, 0]);
+  const [selectedPoint, setSelectedPoint] = useState<TelemetryPoint | null>(null);
   const [user, setUser] = useState<GitHubUser | null>(null);
+  const [isTracking, setIsTracking] = useState(false);
 
-  // --- GitHub Login ---
+  // GitHub OAuth
   const connectGitHub = async () => {
     try {
       const res = await fetch('/api/auth/github/url');
@@ -101,58 +124,64 @@ export default function App() {
     return () => window.removeEventListener('message', handleMessage);
   }, []);
 
-  // --- GPS Tracking ---
-  const sendGPSUpdate = useCallback(async (lat: number, lng: number) => {
+  // --- Fetch Adafruit IO Data ---
+  const fetchAdafruitData = useCallback(async () => {
     try {
-      await fetch('/api/gps', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lat, lng }),
+      const username = 'YOUR_ADAFRUIT_IO_USERNAME';
+      const key = 'YOUR_ADAFRUIT_IO_KEY';
+      const feed = 'road-variance';
+
+      const res = await axios.get(`https://io.adafruit.com/api/v2/${username}/feeds/${feed}/data`, {
+        headers: { 'X-AIO-Key': key }
       });
-      setLatestGPS([lat, lng]);
+
+      const adafruitPoints: TelemetryPoint[] = res.data.map((item: any, index: number) => ({
+        id: index,
+        latitude: parseFloat(item.lat || '0'),
+        longitude: parseFloat(item.lon || '0'),
+        vibration_variance: parseFloat(item.value),
+        status: parseFloat(item.value) > 0.5 ? 'Bad' : 'Good',
+        timestamp: item.created_at
+      }));
+
+      setPoints(adafruitPoints);
+      if (adafruitPoints.length > 0) {
+        setLatestGPS([adafruitPoints[adafruitPoints.length - 1].latitude, adafruitPoints[adafruitPoints.length - 1].longitude]);
+      }
     } catch (err) {
-      console.error("Failed to send GPS:", err);
+      console.error("Failed to fetch Adafruit IO data:", err);
     }
+  }, []);
+
+  // --- Use sample data for testing ---
+  useEffect(() => {
+    // To test with Adafruit, uncomment the below:
+    // fetchAdafruitData();
+    // const interval = setInterval(fetchAdafruitData, 10000); // every 10s
+    // return () => clearInterval(interval);
+
+    // For local testing:
+    setPoints(samplePoints);
+    setLatestGPS([samplePoints[samplePoints.length - 1].latitude, samplePoints[samplePoints.length - 1].longitude]);
+  }, [fetchAdafruitData]);
+
+  // --- GPS tracking simulation ---
+  const sendGPSUpdate = useCallback((lat: number, lng: number) => {
+    setLatestGPS([lat, lng]);
   }, []);
 
   useEffect(() => {
     if (isTracking) {
       const watchId = navigator.geolocation.watchPosition(
-        (pos) => sendGPSUpdate(pos.coords.latitude, pos.coords.longitude),
-        (err) => console.error(err),
+        pos => sendGPSUpdate(pos.coords.latitude, pos.coords.longitude),
+        err => console.error(err),
         { enableHighAccuracy: true }
       );
       return () => navigator.geolocation.clearWatch(watchId);
     }
   }, [isTracking, sendGPSUpdate]);
 
-  // --- WebSocket for Live Data ---
-  useEffect(() => {
-    const newSocket = io();
-    setSocket(newSocket);
-
-    fetch('/api/history')
-      .then(res => res.json())
-      .then(data => setPoints(data));
-
-    newSocket.on('telemetry_update', (data: TelemetryPoint) => {
-      setPoints(prev => [...prev, data]);
-    });
-
-    return () => newSocket.disconnect();
-  }, []);
-
-  // --- Simulate Pi Data ---
-  const simulatePiData = async () => {
-    const variance = Math.random();
-    await fetch('/api/telemetry', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ vibration_variance: variance, session_id: 'mission-alpha' }),
-    });
-  };
-
-  // --- Segments for Polylines ---
+  // --- Polyline segments ---
   const segments = points.reduce((acc: { positions: [number, number][], status: 'Good' | 'Bad' }[], point, i) => {
     if (i === 0) return acc;
     const prev = points[i - 1];
@@ -172,7 +201,7 @@ export default function App() {
             <Activity className="text-black" size={24} />
           </div>
           <div>
-            <h1 className="text-xl font-bold tracking-tight">MISSION CONTROL</h1>
+            <h1 className="text-xl font-bold tracking-tight">Trail Marshal</h1>
             <p className="text-[10px] text-zinc-500 font-mono uppercase tracking-[0.2em]">Infrastructure Monitoring v1.0</p>
           </div>
         </div>
@@ -184,51 +213,57 @@ export default function App() {
               <span className="text-xs font-mono text-zinc-300">{user.username}</span>
             </div>
           ) : (
-            <button onClick={connectGitHub} className="flex items-center gap-2 px-4 py-2 rounded-full bg-zinc-800 text-zinc-100 text-sm font-medium hover:bg-zinc-700 transition-all border border-white/5">
-              <Github size={16} /> CONNECT
+            <button 
+              onClick={connectGitHub}
+              className="flex items-center gap-2 px-4 py-2 rounded-full bg-zinc-800 text-zinc-100 text-sm font-medium hover:bg-zinc-700 transition-all border border-white/5"
+            >
+              <Github size={16} />
+              CONNECT
             </button>
           )}
 
-          <button onClick={() => setIsTracking(!isTracking)} className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all ${isTracking ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/40' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}>
+          <button 
+            onClick={() => setIsTracking(!isTracking)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all ${
+              isTracking 
+              ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/40' 
+              : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+            }`}
+          >
             <Navigation size={16} className={isTracking ? 'animate-pulse' : ''} />
             {isTracking ? 'GPS ACTIVE' : 'START GPS BRIDGE'}
-          </button>
-
-          <button onClick={simulatePiData} className="flex items-center gap-2 px-4 py-2 rounded-full bg-zinc-800 text-zinc-100 text-sm font-medium hover:bg-zinc-700 transition-all border border-white/5">
-            <Radio size={16} /> SIMULATE PI
           </button>
         </div>
       </header>
 
+      {/* Main */}
       <main className="p-6 grid grid-cols-1 lg:grid-cols-4 gap-6 h-[calc(100vh-88px)]">
         {/* Sidebar */}
         <div className="lg:col-span-1 flex flex-col gap-6 overflow-hidden">
           <section className="bg-zinc-900/50 border border-white/5 rounded-2xl p-5">
-            <h2 className="text-xs font-mono text-zinc-500 uppercase tracking-widest mb-4 flex items-center gap-2"><Activity size={14} /> System Telemetry</h2>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="bg-black/40 p-3 rounded-xl border border-white/5">
-                <p className="text-[10px] text-zinc-500 uppercase mb-1">Total Points</p>
-                <p className="text-2xl font-mono font-bold">{points.length}</p>
-              </div>
-              <div className="bg-black/40 p-3 rounded-xl border border-white/5">
-                <p className="text-[10px] text-zinc-500 uppercase mb-1">Current Status</p>
-                {points.length > 0 ? <StatusBadge status={points[points.length - 1].status} /> : <span className="text-zinc-600">IDLE</span>}
-              </div>
-            </div>
-          </section>
-
-          <section className="bg-zinc-900/50 border border-white/5 rounded-2xl p-5 flex-1 flex flex-col overflow-hidden">
-            <h2 className="text-xs font-mono text-zinc-500 uppercase tracking-widest mb-4">Live Feed</h2>
-            <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
+            <h2 className="text-xs font-mono text-zinc-500 uppercase tracking-widest mb-4 flex items-center gap-2">
+              <Activity size={14} /> Road Severity Feed
+            </h2>
+            <div className="flex-1 overflow-y-auto space-y-2 max-h-[70vh] pr-2 custom-scrollbar">
               <AnimatePresence initial={false}>
                 {[...points].reverse().map((p) => (
-                  <motion.div key={p.id} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="bg-black/30 p-3 rounded-xl border border-white/5 text-[11px] font-mono">
-                    <div className="flex justify-between items-start mb-1">
+                  <motion.div 
+                    key={p.id}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    className="bg-black/30 p-2 rounded-xl border border-white/5 text-[11px] font-mono cursor-pointer hover:bg-zinc-800"
+                    onClick={() => setSelectedPoint(p)}
+                  >
+                    <div className="flex justify-between items-center">
                       <span className="text-zinc-500">{new Date(p.timestamp).toLocaleTimeString()}</span>
                       <StatusBadge status={p.status} />
                     </div>
-                    <div className="text-zinc-400">VAR: {p.vibration_variance.toFixed(4)}</div>
-                    <div className="text-zinc-600 truncate">LOC: {p.latitude.toFixed(4)}, {p.longitude.toFixed(4)}</div>
+                    <div className="text-zinc-400">
+                      VAR: {p.vibration_variance.toFixed(4)}
+                    </div>
+                    <div className="text-zinc-600 truncate">
+                      LOC: {p.latitude.toFixed(4)}, {p.longitude.toFixed(4)}
+                    </div>
                   </motion.div>
                 ))}
               </AnimatePresence>
@@ -238,17 +273,28 @@ export default function App() {
 
         {/* Map */}
         <div className="lg:col-span-3 bg-zinc-900 rounded-2xl overflow-hidden border border-white/5 relative shadow-2xl">
-          <MapContainer center={[37.7749, -122.4194]} zoom={13} className="h-full w-full">
-            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; OpenStreetMap contributors' />
+          <MapContainer 
+            center={latestGPS} 
+            zoom={13} 
+            className="h-full w-full"
+          >
+            <TileLayer
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              attribution='&copy; OpenStreetMap contributors'
+            />
 
             {/* Polylines */}
             {segments.map((seg, idx) => (
               <Polyline key={idx} positions={seg.positions} color={seg.status === 'Good' ? '#10b981' : '#f43f5e'} weight={6} opacity={0.8} />
             ))}
 
-            {/* Latest GPS marker */}
+            {/* Latest marker */}
             {points.length > 0 && (
-              <CircleMarker center={[points[points.length - 1].latitude, points[points.length - 1].longitude]} radius={8} pathOptions={{ fillColor: '#fff', fillOpacity: 1, color: '#000', weight: 2 }}>
+              <CircleMarker 
+                center={[points[points.length - 1].latitude, points[points.length - 1].longitude]}
+                radius={8}
+                pathOptions={{ fillColor: '#fff', fillOpacity: 1, color: '#000', weight: 2 }}
+              >
                 <Popup>
                   <div className="font-sans">
                     <p className="font-bold">Current Location</p>
@@ -258,10 +304,13 @@ export default function App() {
               </CircleMarker>
             )}
 
-            <MapAutoCenter coords={latestGPS} />
-
             {/* Heatmap */}
             <HeatmapLayer points={points} />
+
+            {/* Selected marker */}
+            {selectedPoint && <SelectedPointMarker point={selectedPoint} />}
+
+            <MapAutoCenter coords={latestGPS} />
           </MapContainer>
         </div>
       </main>
@@ -269,7 +318,7 @@ export default function App() {
       <style>{`
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
         .leaflet-container { background: #0a0a0a !important; }
       `}</style>
     </div>
