@@ -2,14 +2,9 @@ import { useEffect } from 'react';
 import { useMap } from 'react-leaflet';
 import * as L from 'leaflet';
 import 'leaflet.heat';
+import { TelemetryPoint } from '../types';
 
-interface TelemetryPoint {
-  latitude: number;
-  longitude: number;
-  vibration_variance: number;
-}
-
-export default function HeatmapLayer({ points }: { points: TelemetryPoint[] }) {
+export const HeatmapLayer = ({ points }: { points: TelemetryPoint[] }) => {
   const map = useMap();
 
   useEffect(() => {
@@ -19,11 +14,10 @@ export default function HeatmapLayer({ points }: { points: TelemetryPoint[] }) {
       radius: 25,
       blur: 15,
       maxZoom: 17,
-      gradient: { 0.2: 'green', 0.5: 'yellow', 0.8: 'orange', 1: 'red' }
+      gradient: { 0.2: 'green', 0.5: 'yellow', 0.8: 'orange', 1.0: 'red' }
     }).addTo(map);
-
     return () => heat.remove();
   }, [points, map]);
 
   return null;
-}
+};
