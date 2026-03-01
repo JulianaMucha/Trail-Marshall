@@ -62,9 +62,15 @@ export default function App() {
   // --- Load data on mount ---
   useEffect(() => {
     if (useSampleData) {
+      // Show sample data
       setPoints(samplePoints);
-      setLatestGPS([samplePoints[samplePoints.length - 1].latitude, samplePoints[samplePoints.length - 1].longitude]);
+      setLatestGPS([
+        samplePoints[samplePoints.length - 1].latitude,
+        samplePoints[samplePoints.length - 1].longitude
+      ]);
     } else {
+      // Clear the points immediately so the UI shows nothing while fetching
+      setPoints([]);
       fetchAdafruitData();
       const interval = setInterval(fetchAdafruitData, 10000); // refresh every 10s
       return () => clearInterval(interval);
@@ -87,7 +93,12 @@ export default function App() {
           </button>
 
           <button
-            onClick={() => setUseSampleData(!useSampleData)}
+            onClick={() => { setUseSampleData(!useSampleData);
+              if (!useSampleData) {
+                // We are switching TO Adafruit, clear old sample data immediately
+                setPoints([]);
+              }
+             }}
             className="px-4 py-2 rounded-full text-sm font-medium bg-zinc-800 text-zinc-100 hover:bg-zinc-700"
           >
             {useSampleData ? 'USE ADAFRUIT DATA' : 'USE SAMPLE DATA'}
