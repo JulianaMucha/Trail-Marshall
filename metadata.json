@@ -1,0 +1,5 @@
+{
+    "name": "Mission Control: Road Health Monitor",
+    "description": "Real-time infrastructure monitoring dashboard mapping road quality using Raspberry Pi telemetry and mobile GPS bridging.",
+    "requestFramePermissions": ["geolocation"]
+  }
